@@ -3,8 +3,6 @@ local api = vim.api
 local fn = vim.fn
 local validate = vim.validate
 
-local EXTMARKS = true
-
 local M = {}
 
 local function defaultdict(default_fn)
@@ -70,7 +68,7 @@ local set_lines = vim.lsp.util.set_lines
 local apply_text_edits = vim.lsp.util.apply_text_edits
 
 local function get_mark(bufnr, id)
-  return api.nvim_buf_get_extmarks(bufnr, mark_ns, id, id, {limit=1})[1]
+  return api.nvim_buf_get_extmark_by_id(bufnr, mark_ns, id)
 end
 
 local function make_edit(y_0, x_0, y_1, x_1, text)
@@ -115,30 +113,31 @@ end
 -- Returns a function which can be used to append text at a pos or at the end
 -- of the buffer.
 local function updateable_buffer(bufnr, pos)
-  vim.validate { bufnr = {bufnr, 'n'}}
-  local last_line, last_line_idx, final_suffix
+  vim.validate { bufnr = {bufnr, 'n'} }
+  local last_row, last_col
   if pos then
     pos = vim.list_extend({}, pos)
-    pos[1] = pos[1] - 1
-    last_line = api.nvim_buf_get_lines(bufnr, pos[1], pos[1]+1, false)[1]
-    final_suffix = last_line:sub(pos[2]+1)
-    last_line = last_line:sub(1, pos[2])
-    last_line_idx = pos[1]
+    last_row = pos[1] - 1
+    last_col = pos[2]
   else
-    last_line = api.nvim_buf_get_lines(bufnr, -2, -1, false)[1]
-    last_line_idx = math.max(api.nvim_buf_line_count(bufnr) - 1, 0)
+    last_row = math.max(api.nvim_buf_line_count(bufnr) - 1, 0)
+    local last_line = api.nvim_buf_get_lines(bufnr, last_row, 1, false)[1]
+    last_col = #last_line or 0
   end
   return function(chunk)
     local lines = vim.split(chunk, '\n', true)
     if #lines > 0 then
-      lines[1] = last_line..lines[1]
-      local start_pos = {last_line_idx, #last_line > 0 and #last_line or 0}
-      last_line = lines[#lines]
-      lines[#lines] = lines[#lines]..final_suffix
+      local start_pos = {last_row, last_col}
       -- nvim.print{lines = lines; last_line = last_line; last_line_idx = last_line_idx; start_pos=start_pos}
-      api.nvim_buf_set_lines(bufnr, last_line_idx, last_line_idx + 1, false, lines)
-      last_line_idx = last_line_idx + #lines - 1
-      return {last_line_idx, #last_line > 0 and #last_line or 0}, start_pos
+      api.nvim_buf_set_text(bufnr, last_row, last_col, last_row, last_col, lines)
+      last_row = last_row + #lines - 1
+      local last_line = lines[#lines]
+      if start_pos[1] == last_row then
+        last_col = start_pos[2] + #last_line or 0
+      else
+        last_col = #last_line or 0
+      end
+      return {last_row, last_col}, start_pos
     end
   end
 end
@@ -309,13 +308,7 @@ function M.expand_snippet(snippet)
     __index = function(t, k)
       if k == 'range' then
         function t.range()
-          -- TODO(ashkan) @bfredl this is the part that breaks.
-          local A
-          if EXTMARKS then
-            A = get_mark(bufnr, t.mark_id)
-          else
-            A = t.A
-          end
+          local A = get_mark(bufnr, t.mark_id)
           local lines = vim.split(t.text, '\n', true)
           local B = vim.list_extend({}, A)
           B[1] = B[1] + #lines - 1
@@ -345,9 +338,6 @@ function M.expand_snippet(snippet)
         -- TODO(ashkan) this is only here until extranges exists.
         text = config[1];
       }
-      if not EXTMARKS then
-        var_part.A = v[2];
-      end
       -- TODO(ashkan) this is only here until extranges exists.
       var_part = setmetatable(var_part, var_mt)
       table.insert(variable_map[var_id], var_part)
