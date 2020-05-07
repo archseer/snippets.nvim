@@ -65,7 +65,68 @@ local highlight_ns = api.nvim_create_namespace('snippet_var_highlight')
 local all_buffer_snippet_queues = defaultdict_table()
 
 local set_lines = vim.lsp.util.set_lines
-local apply_text_edits = vim.lsp.util.apply_text_edits
+-- local apply_text_edits = vim.lsp.util.apply_text_edits
+
+-- TODO: these are from vim.lsp.apply_text_edits
+local function sort_by_key(fn)
+  return function(a,b)
+    local ka, kb = fn(a), fn(b)
+    assert(#ka == #kb)
+    for i = 1, #ka do
+      if ka[i] ~= kb[i] then
+        return ka[i] < kb[i]
+      end
+    end
+    -- every value must have been equal here, which means it's not less than.
+    return false
+  end
+end
+local edit_sort_key = sort_by_key(function(e)
+  return {e.A[1], e.A[2], e.i}
+end)
+-- TODO: replace vim.lsp.apply_text_edits upstream once set_text is merged. No
+-- more need for M.set_lines.
+local function apply_text_edits(text_edits, bufnr)
+  if not next(text_edits) then return end
+  local start_line, finish_line = math.huge, -1
+  local cleaned = {}
+  for i, e in ipairs(text_edits) do
+    start_line = math.min(e.range.start.line, start_line)
+    finish_line = math.max(e.range["end"].line, finish_line)
+    -- TODO(ashkan) sanity check ranges for overlap.
+    table.insert(cleaned, {
+      i = i;
+      A = {e.range.start.line; e.range.start.character};
+      B = {e.range["end"].line; e.range["end"].character};
+      lines = vim.split(e.newText, '\n', true);
+    })
+  end
+
+  print(vim.inspect(cleaned))
+  -- Reverse sort the orders so we can apply them without interfering with
+  -- eachother. Also add i as a sort key to mimic a stable sort.
+  table.sort(cleaned, edit_sort_key)
+  if not api.nvim_buf_is_loaded(bufnr) then
+    vim.fn.bufload(bufnr)
+  end
+  local lines = api.nvim_buf_get_lines(bufnr, start_line, finish_line + 1, false)
+  local fix_eol = api.nvim_buf_get_option(bufnr, 'fixeol')
+  local set_eol = fix_eol and api.nvim_buf_line_count(bufnr) <= finish_line + 1
+  if set_eol and #lines[#lines] ~= 0 then
+    table.insert(lines, '')
+  end
+
+  for i = #cleaned, 1, -1 do
+    local e = cleaned[i]
+    -- local A = {e.A[1] - start_line, e.A[2]}
+    -- local B = {e.B[1] - start_line, e.B[2]}
+    api.nvim_buf_set_text(bufnr, e.A[1], e.A[2], e.B[1], e.B[2], e.lines)
+  end
+  -- TODO: port this
+  -- if set_eol and #lines[#lines] == 0 then
+  --   table.remove(lines)
+  -- end
+end
 
 local function get_mark(bufnr, id)
   return api.nvim_buf_get_extmark_by_id(bufnr, mark_ns, id)
@@ -460,7 +521,6 @@ function M.expand_at_cursor()
   local line = api.nvim_get_current_line()
   local word = line:sub(1, offset):match("%S+$")
   local snippet = M.snippets[word]
-  print(vim.inspect(word))
   if snippet then
     pos[1] = pos[1] - 1
     schedule(apply_text_edits, { make_edit(pos[1], pos[2] - #word, pos[1], pos[2], '') })
