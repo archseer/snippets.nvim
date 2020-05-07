@@ -219,20 +219,23 @@ local function create_marked_buffer(bufnr, ns, data, pos)
     local mark_id
     -- Disallow space characters.
     if type(config) == 'table' then
-      mark_id = api.nvim_buf_set_extmark(bufnr, ns, config.id or 0, start_pos[1], start_pos[2], {})
+      -- we shift starting col one to the left, then return the correct val on range()
+      -- otherwise set_text at this pos moves the marker to the right
+      mark_id = api.nvim_buf_set_extmark(bufnr, ns, config.id or 0, start_pos[1], start_pos[2]-1, {})
       -- local line = api.nvim_buf_get_lines(bufnr, start_pos[1], start_pos[1]+1, false)
 --      mark_id = api.nvim_buf_set_extmark(bufnr, ns, config.id or 0, start_pos[1], math.max(0, math.min(start_pos[2], #line-1)), {})
     end
+    -- print(vim.inspect({mark_id, start_pos, last_pos}))
     table.insert(marks, {mark_id, start_pos, last_pos})
   end
   -- TODO(ashkan) this is for a bug where positions may be set incorrectly by
   -- the previous loop if multiple parts are on the same line, so we just
   -- reinforce the positions.
-  for _, v in ipairs(marks) do
-    if v[1] then
-      api.nvim_buf_set_extmark(bufnr, ns, v[1], v[2][1], v[2][2], {})
-    end
-  end
+  -- for _, v in ipairs(marks) do
+  --   if v[1] then
+  --     api.nvim_buf_set_extmark(bufnr, ns, v[1], v[2][1], v[2][2], {})
+  --   end
+  -- end
   return marks
 end
 
@@ -370,6 +373,7 @@ function M.expand_snippet(snippet)
       if k == 'range' then
         function t.range()
           local A = get_mark(bufnr, t.mark_id)
+          A[2] = A[2] + 1
           local lines = vim.split(t.text, '\n', true)
           local B = vim.list_extend({}, A)
           B[1] = B[1] + #lines - 1
