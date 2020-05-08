@@ -83,16 +83,10 @@ local function many(p)
   end
 end
 
-local function take_until(...)
-  local patterns = { ... }
+local function take_until(patterns)
   return function(text, pos)
-    local s, e
-    for _, c in ipairs(patterns) do
-      s, e = text:find(c, pos, true)
-
-      -- TODO: handle escaping
-      if s then break end
-    end
+    local s, e = text:find(patterns, pos)
+    -- TODO: handle escaping
 
     if s then
       -- would be empty string
@@ -192,12 +186,14 @@ tabstop = map(
 )
 
 placeholder = map(
-  seq(dollar, open, int, colon, many(any(anything, any(text("$", "}")))), close),
+  -- match until $ or }
+  seq(dollar, open, int, colon, many(any(anything, text("[%$}]"))), close),
   function(v) return { type = "placeholder", id = v[1], value = v[2] } end
 )
 
 choice = map(
-  seq(dollar, open, int, pipe, separated(comma, text(",", "|")), pipe, close),
+  -- match until , or |
+  seq(dollar, open, int, pipe, separated(comma, text("[,|]")), pipe, close),
   function(v) return { type = "choice", id = v[1], value = v[2] } end
 )
 
@@ -217,13 +213,14 @@ variable = any(
 )
 
 -- toplevel text matches until $
-local parser = many(any(anything, text("$")))
+parse = many(any(anything, text("%$")))
 
 
-s, v, _ = parser("", 1)
-s, v, _ = parser("hello $1${2} ${1|one,two,three|} ${name:foo} $var $TM ${TM_FILENAME/(.*).+$/$1/} ${1: $TM_SELECTED_TEXT }", 1)
-print(vim.inspect(v))
+-- s, v, _ = parse("", 1)
+-- s, v, _ = parse("hello $1${2} ${1|one,two,three|} ${name:foo} $var $TM ${TM_FILENAME/(.*).+$/$1/} ${1: $TM_SELECTED_TEXT }", 1)
+-- s, v, p = parse("local ${1:var} = ${1:value}", 1)
+-- print(s, vim.inspect(v), p)
 
-return { parse }
+return { parse = parse }
 
 -- vim:et ts=2 sw=2

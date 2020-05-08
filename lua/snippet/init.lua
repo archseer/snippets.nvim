@@ -2,6 +2,7 @@ local vim = vim
 local api = vim.api
 local fn = vim.fn
 local validate = vim.validate
+local parse = require('snippet.parser').parse
 
 local M = {}
 
@@ -25,20 +26,6 @@ local function resolve_bufnr(bufnr)
     return api.nvim_get_current_buf()
   end
   return bufnr
-end
-
-local function sort_by_key(fn)
-  return function(a,b)
-    local ka, kb = fn(a), fn(b)
-    assert(#ka == #kb)
-    for i = 1, #ka do
-      if ka[i] ~= kb[i] then
-        return ka[i] < kb[i]
-      end
-    end
-    -- every value must have been equal here, which means it's not less than.
-    return false
-  end
 end
 
 local function schedule(fn, ...)
@@ -102,7 +89,6 @@ local function apply_text_edits(text_edits, bufnr)
     })
   end
 
-  print(vim.inspect(cleaned))
   -- Reverse sort the orders so we can apply them without interfering with
   -- eachother. Also add i as a sort key to mimic a stable sort.
   table.sort(cleaned, edit_sort_key)
@@ -118,8 +104,6 @@ local function apply_text_edits(text_edits, bufnr)
 
   for i = #cleaned, 1, -1 do
     local e = cleaned[i]
-    -- local A = {e.A[1] - start_line, e.A[2]}
-    -- local B = {e.B[1] - start_line, e.B[2]}
     api.nvim_buf_set_text(bufnr, e.A[1], e.A[2], e.B[1], e.B[2], e.lines)
   end
   -- TODO: port this
@@ -154,18 +138,18 @@ local function highlight_region(bufnr, ns, hlid, A, B)
   end
 end
 
-local function find_max(t, score_fn)
-  if #t == 0 then return end
-  local max_i = 1
-  local max_score = score_fn(t[1])
-  for i = 2, #t do
-    local score = score_fn(t[i])
-    if max_score < score then
-      max_i, max_score = i, score
-    end
-  end
-  return max_i, max_score
-end
+-- local function find_max(t, score_fn)
+--   if #t == 0 then return end
+--   local max_i = 1
+--   local max_score = score_fn(t[1])
+--   for i = 2, #t do
+--     local score = score_fn(t[i])
+--     if max_score < score then
+--       max_i, max_score = i, score
+--     end
+--   end
+--   return max_i, max_score
+-- end
 
 local function clear_ns(bufnr, ns)
   return api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
@@ -202,43 +186,6 @@ local function updateable_buffer(bufnr, pos)
     end
   end
 end
-
--- Create extmarks interspersed with regular text by using updateable_buffer
-local function create_marked_buffer(bufnr, ns, data, pos)
-  local update = updateable_buffer(bufnr, pos)
-  local marks = {}
-  for _, config in ipairs(data) do
-    local text
-    if type(config) == 'string' then
-      text = config
-    elseif type(config) == 'table' then
-      text = config[1]
-    end
-    -- vim.validate{config={config,'t'}}
-    local last_pos, start_pos = update(text)
-    local mark_id
-    -- Disallow space characters.
-    if type(config) == 'table' then
-      -- we shift starting col one to the left, then return the correct val on range()
-      -- otherwise set_text at this pos moves the marker to the right
-      mark_id = api.nvim_buf_set_extmark(bufnr, ns, config.id or 0, start_pos[1], start_pos[2]-1, {})
-      -- local line = api.nvim_buf_get_lines(bufnr, start_pos[1], start_pos[1]+1, false)
---      mark_id = api.nvim_buf_set_extmark(bufnr, ns, config.id or 0, start_pos[1], math.max(0, math.min(start_pos[2], #line-1)), {})
-    end
-    -- print(vim.inspect({mark_id, start_pos, last_pos}))
-    table.insert(marks, {mark_id, start_pos, last_pos})
-  end
-  -- TODO(ashkan) this is for a bug where positions may be set incorrectly by
-  -- the previous loop if multiple parts are on the same line, so we just
-  -- reinforce the positions.
-  -- for _, v in ipairs(marks) do
-  --   if v[1] then
-  --     api.nvim_buf_set_extmark(bufnr, ns, v[1], v[2][1], v[2][2], {})
-  --   end
-  -- end
-  return marks
-end
-
 
 local function highlight_variable(bufnr, var)
   clear_ns(bufnr, highlight_ns)
@@ -361,53 +308,172 @@ end
 --  error("todo")
 -- end
 
+-- @see https://code.visualstudio.com/docs/editor/userdefinedsnippets#_variables
+function resolve_variable(name)
+  if name == 'TM_SELECTED_TEXT' then
+    return '' -- TODO
+
+  elseif name == 'TM_CURRENT_LINE' then
+    return fn.getline('.')
+
+  elseif name == 'TM_CURRENT_WORD' then
+    return ''
+
+  elseif name == 'TM_LINE_INDEX' then
+    return fn.line('.') - 1
+
+  elseif name == 'TM_LINE_NUMBER' then
+    return fn.line('.')
+
+  elseif name == 'TM_FILENAME' then
+    return fn.expand('%:p:t')
+
+  elseif name == 'TM_FILENAME_BASE' then
+    return fn.substitute(fn.expand('%:p:t'), '^@<!..*$', '', '')
+
+  elseif name == 'TM_DIRECTORY' then
+    return fn.expand('%:p:h:t')
+
+  elseif name == 'TM_FILEPATH' then
+    return fn.expand('%:p')
+
+  elseif name == 'CLIPBOARD' then
+    return fn.getreg(vim.v.register)
+
+  elseif name == 'WORKSPACE_NAME' then
+    return ''
+
+  elseif name == 'CURRENT_YEAR' then
+    return fn.strftime('%Y')
+
+  elseif name == 'CURRENT_YEAR_SHORT' then
+    return fn.strftime('%y')
+
+  elseif name == 'CURRENT_MONTH' then
+    return fn.strftime('%m')
+
+  elseif name == 'CURRENT_MONTH_NAME' then
+    return fn.strftime('%B')
+
+  elseif name == 'CURRENT_MONTH_NAME_SHORT' then
+    return fn.strftime('%b')
+
+  elseif name == 'CURRENT_DATE' then
+    return fn.strftime('%d')
+
+  elseif name == 'CURRENT_DAY_NAME' then
+    return fn.strftime('%A')
+
+  elseif name == 'CURRENT_DAY_NAME_SHORT' then
+    return fn.strftime('%a')
+
+  elseif name == 'CURRENT_HOUR' then
+    return fn.strftime('%H')
+
+  elseif name == 'CURRENT_MINUTE' then
+    return fn.strftime('%M')
+
+  elseif name == 'CURRENT_SECOND' then
+    return fn.strftime('%S')
+
+  elseif name == 'BLOCK_COMMENT_START' then
+    return '/**' -- TODO
+
+  elseif name == 'BLOCK_COMMENT_END' then
+    return '*/' -- TODO
+
+  elseif name == 'LINE_COMMENT' then
+    return '//' -- TODO
+  end
+
+  return ''
+end
+
 function M.expand_snippet(snippet)
   local bufnr = resolve_bufnr(0)
-  validate {
-    body = {snippet.body, 't'};
-    text = {snippet.text, 's', true};
-  }
+  -- validate {
+  --   body = {snippet.body, 't'};
+  --   text = {snippet.text, 's', true};
+  -- }
   -- TODO(ashkan) this should be changed when extranges are available.
   local var_mt = {
     __index = function(t, k)
       if k == 'range' then
         function t.range()
-          local A = get_mark(bufnr, t.mark_id)
+          local A = get_mark(bufnr, t.mark_start)
+          local B = get_mark(bufnr, t.mark_end)
           A[2] = A[2] + 1
-          local lines = vim.split(t.text, '\n', true)
-          local B = vim.list_extend({}, A)
-          B[1] = B[1] + #lines - 1
-          B[2] = B[2] + #lines[#lines]
+          B[2] = B[2] + 1
           return A, B
         end
         return t.range
+      elseif k == 'text' then
+        function t.text()
+          local A, B = t.range()
+          -- print(vim.inspect(A), vim.inspect(B))
+          local lines = api.nvim_buf_get_lines(bufnr, A[1], B[1]+1, false)
+          lines[1] = lines[1]:sub(A[2]+1)
+          lines[#lines] = lines[#lines]:sub(1, B[2]+1)
+          -- TODO: keep separate?
+          return table.concat(lines, '\n')
+        end
+        return t.text
       end
     end;
   }
-  local body = snippet.body
-  M.validate_snippet_body(body)
+  -- TODO: re-enable M.validate_snippet_body(snippet)
   local pos = api.nvim_win_get_cursor(0)
   -- TODO(ashkan) make sure that only the first variable of each kind has text
   -- inserted for this basic version.
-  local result = create_marked_buffer(bufnr, mark_ns, body, pos)
+
+  -- Create extmarks interspersed with regular text by using updateable_buffer
+  -- TODO: now embedding and refactoring this
   local variable_map = defaultdict_table()
-  -- Join the input definition with out output.
-  for i, v in ipairs(result) do
-    local mark_id = v[1]
-    if mark_id then
-      local config = body[i]
-      assert(type(config) == 'table')
-      local var_id = assert(config.var_id)
+  local update = updateable_buffer(bufnr, pos)
+  for _, node in ipairs(snippet) do
+    local text
+    if type(node) == 'string' then
+      text = node
+    elseif type(node) == 'table' then
+      if node.type == 'tabstop' then
+        text = ''
+      elseif node.type == 'placeholder' then
+        -- TODO: handle recursive
+        text = node.value[1]
+      elseif node.type == 'choice' then
+        -- TODO: open popup with choices
+        text = node.value[1]
+      elseif node.type == 'variable' then
+        text = resolve_variable(node.name)
+      end
+    end
+
+    local last_pos, start_pos = update(text)
+    -- Disallow space characters. TODO(??)
+    -- TODO: allow editing variables
+    if type(node) == 'table' and node.type ~= 'variable' then
+      -- we shift starting col one to the left, then return the correct val on range()
+      -- otherwise set_text at this pos moves the marker to the right
+      --
+      -- TODO: start mark at 0,0, then inserting doesn't work properly, need
+      -- left gravity. Ideally, insert left & right gravity marks at pos, then
+      -- insert at that pos and it should just work.
+      local mark_start = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, start_pos[1], start_pos[2]-1, {})
+      local mark_end = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, last_pos[1], last_pos[2]-1, {})
+
+      local var_id = assert(node.id)
       local var_part = {
-        mark_id = v[1];
+        mark_start = mark_start;
         -- TODO(ashkan) this is only here until extranges exists.
-        text = config[1];
+        mark_end = mark_end;
       }
       -- TODO(ashkan) this is only here until extranges exists.
       var_part = setmetatable(var_part, var_mt)
+      -- print(vim.inspect(var_part.text()))
       table.insert(variable_map[var_id], var_part)
     end
   end
+
   -- For fully resolved/static snippets, don't queue them.
   if not vim.tbl_isempty(variable_map) then
     table.insert(all_buffer_snippet_queues[bufnr], {
@@ -419,6 +485,8 @@ function M.expand_snippet(snippet)
     snippet_mode_setup()
     M.advance_snippet_variable(0)
   end
+
+  -- TODO: append $0 past end if there's no $0 tabstop
 end
 
 local function get_vim_key(s)
@@ -443,7 +511,7 @@ local function do_buffer(bufnr, fn)
   end
   local active_var = active_snippet.vars[active_snippet.var_index]
   local edits = {}
-  local new_text = fn(active_var[1].text)
+  local new_text = fn(active_var[1].text())
   for _, v in ipairs(active_var) do
     local A, B = v.range()
     local edit = make_edit(A[1], A[2], B[1], B[2], new_text)
@@ -455,7 +523,7 @@ local function do_buffer(bufnr, fn)
       apply_text_edits(edits, bufnr)
       clear_ns(bufnr, highlight_ns)
       highlight_variable(bufnr, active_var)
-      local _, B = active_var[1].range()
+      local A, B = active_var[1].range()
       api.nvim_win_set_cursor(0, {B[1]+1, B[2]})
     end)
     return true
@@ -503,20 +571,9 @@ api.nvim_set_keymap("i", "<BS>", "v:lua.vim.snippet._hooks.key_backspace()", {
 })
 
 M.snippets = {
-  ['loc'] =  {
-    body = {
-      'local '; {'var', var_id = 1}; ' = '; {'value', var_id = 2};
-    }
-  };
-  ['for'] =  {
-    body = {
-      'for '; {'i', var_id = 1}; ' = '; {'1', var_id = 2}; ', '; {'#lines', var_id = 3}; ' do\n';
-      '  local v = '; {'t', var_id = 4}; '['; {'', var_id = 1}; '];\n';
-      'end\n';
-      -- TODO(ashkan) handle $0 better. Should auto finish.
-      {'', var_id = 5};
-    }
-  };
+  ['loc'] = 'local ${1:var} = $CURRENT_YEAR ${2:value}',
+  -- TODO: handle $0 better. Should auto finish ($5).
+  ['for'] = '${1:i} = ${2:1}, ${3:#lines} do\n  local v = ${4:t}[${1:i}]\nend\n$5',
 }
 
 function M.expand_at_cursor()
@@ -526,12 +583,15 @@ function M.expand_at_cursor()
   local word = line:sub(1, offset):match("%S+$")
   local snippet = M.snippets[word]
   if snippet then
+    res, snippet, _ = parse(snippet, 1)
+    if not res then
+      return false
+    end
     pos[1] = pos[1] - 1
     schedule(apply_text_edits, { make_edit(pos[1], pos[2] - #word, pos[1], pos[2], '') })
     schedule(M.expand_snippet, snippet)
     return true
   end
-  return true
 end
 
 api.nvim_set_keymap("i", "<BS>", "v:lua.vim.snippet._hooks.key_backspace()", {
