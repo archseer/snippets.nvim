@@ -138,6 +138,21 @@ local function highlight_region(bufnr, ns, hlid, A, B)
   end
 end
 
+local function select_region(A, B)
+  -- convert to 1-indexed coordinates
+  A[1] = A[1] + 1
+  A[2] = A[2] + 1
+  B[1] = B[1] + 1
+  B[2] = B[2] + 1
+  -- Seems to be in a weird mode where it's a block but keeps editing if we don't esc
+  api.nvim_feedkeys("", 'n', false)
+  -- nvim api is missing set_mark
+  vim.fn.setpos("'<", {0, A[1], A[2], 0})
+  vim.fn.setpos("'>", {0, B[1], B[2], 0})
+  api.nvim_command("normal! gv")
+end
+
+
 -- local function find_max(t, score_fn)
 --   if #t == 0 then return end
 --   local max_i = 1
@@ -253,7 +268,7 @@ end
 
 local function snippet_mode_setup()
   do_hook_autocmds {
-    "autocmd InsertCharPre <buffer> lua vim.snippet._hooks.InsertCharPre()";
+    -- "autocmd InsertCharPre <buffer> lua vim.snippet._hooks.InsertCharPre()";
     -- "autocmd InsertLeave <buffer> lua vim.snippet._hooks.InsertLeave()";
     -- "autocmd InsertEnter <buffer> lua vim.snippet._hooks.InsertEnter()";
   }
@@ -290,9 +305,11 @@ function M.advance_snippet_variable(direction)
   local var = active_snippet.vars[new_index]
   if not vim.tbl_isempty(var or {}) then
     active_snippet.var_index = new_index
-    highlight_variable(bufnr, var)
-    local _, B = var[1].range()
-    api.nvim_win_set_cursor(0, {B[1]+1, B[2]})
+    -- highlight_variable(bufnr, var)
+    local A, B = var[1].range()
+    -- api.nvim_win_set_cursor(0, {B[1]+1, B[2]})
+    -- TODO: be smart about it and select if range, insert/append if empty
+    select_region(A, B)
     return true
   end
   return false
@@ -533,12 +550,12 @@ end
 
 M._hooks = {}
 
-function M._hooks.InsertCharPre()
-  do_buffer(0, function(text)
-    return text..vim.v.char
-  end)
-  vim.v.char = ''
-end
+-- function M._hooks.InsertCharPre()
+--   do_buffer(0, function(text)
+--     return text..vim.v.char
+--   end)
+--   vim.v.char = ''
+-- end
 
 -- function M._hooks.InsertLeave()
 --  local bufnr = resolve_bufnr(0)
@@ -556,19 +573,6 @@ end
 --    schedule(api.nvim_win_set_cursor, 0, {B[1]+1, B[2]})
 --  end
 -- end
-
-function M._hooks.key_backspace()
-  do_buffer(0, function(text)
-    return text:sub(1, #text - 1)
-  end)
-  return vim_keys.bs
-end
-
--- TODO(ashkan) set this up on expand snippet and restore the user settings
--- after finish_snippet
-api.nvim_set_keymap("i", "<BS>", "v:lua.vim.snippet._hooks.key_backspace()", {
-  expr = true;
-})
 
 M.snippets = {
   ['loc'] = 'local ${1:var} = $CURRENT_YEAR ${2:value}',
@@ -593,10 +597,6 @@ function M.expand_at_cursor()
     return true
   end
 end
-
-api.nvim_set_keymap("i", "<BS>", "v:lua.vim.snippet._hooks.key_backspace()", {
-  expr = true;
-})
 
 api.nvim_set_keymap("i", "<c-k>", "<cmd>lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
   noremap = true;
