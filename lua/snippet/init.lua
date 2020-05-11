@@ -142,8 +142,9 @@ local function select_region(A, B)
   -- convert lines to 1-indexed coordinates
   A[1] = A[1] + 1
   B[1] = B[1] + 1
-  -- adjust  for off-by-1
+  -- adjust  for off-by-1 when leaving insert mode
   A[2] = A[2] + 1
+  B[2] = B[2] + 1
 
   -- api.nvim_feedkeys("\\<Esc>", 'ntx', true)
   vim.fn.setpos("'<", {0, A[1], A[2]})
@@ -177,7 +178,7 @@ local function updateable_buffer(bufnr, pos)
   local last_row, last_col
   if pos then
     pos = vim.list_extend({}, pos)
-    last_row = pos[1] - 1
+    last_row = pos[1]
     last_col = pos[2]
   else
     last_row = math.max(api.nvim_buf_line_count(bufnr) - 1, 0)
@@ -191,13 +192,13 @@ local function updateable_buffer(bufnr, pos)
       -- nvim.print{lines = lines; last_line = last_line; last_line_idx = last_line_idx; start_pos=start_pos}
       api.nvim_buf_set_text(bufnr, last_row, last_col, last_row, last_col, lines)
       last_row = last_row + #lines - 1
-      local last_line = lines[#lines]
+      local last_line = lines[#lines] or ''
       if start_pos[1] == last_row then
-        last_col = start_pos[2] + #last_line or 0
+        last_col = start_pos[2] + #last_line
       else
-        last_col = #last_line or 0
+        last_col = #last_line
       end
-      return {last_row, last_col}, start_pos
+      return start_pos, {last_row, last_col}
     end
   end
 end
@@ -419,8 +420,8 @@ function M.expand_snippet(snippet)
         function t.range()
           local A = get_mark(bufnr, t.mark_start)
           local B = get_mark(bufnr, t.mark_end)
-          A[2] = A[2] + 1
-          B[2] = B[2] + 1
+          -- convert to 1-indexing
+          B[2] = B[2] - 1
           return A, B
         end
         return t.range
@@ -429,8 +430,12 @@ function M.expand_snippet(snippet)
           local A, B = t.range()
           -- print(vim.inspect(A), vim.inspect(B))
           local lines = api.nvim_buf_get_lines(bufnr, A[1], B[1]+1, false)
-          lines[1] = lines[1]:sub(A[2]+1)
-          lines[#lines] = lines[#lines]:sub(1, B[2]+1)
+          if #lines == 1 then
+            lines[1] = lines[1]:sub(A[2]+1, B[2]+1)
+          else
+            lines[1] = lines[1]:sub(A[2]+1)
+            lines[#lines] = lines[#lines]:sub(1, B[2]+1)
+          end
           -- TODO: keep separate?
           return table.concat(lines, '\n')
         end
@@ -440,6 +445,9 @@ function M.expand_snippet(snippet)
   }
   -- TODO: re-enable M.validate_snippet_body(snippet)
   local pos = api.nvim_win_get_cursor(0)
+  -- convert to 0-indexed line
+  pos[1] = pos[1] - 1
+
   -- TODO(ashkan) make sure that only the first variable of each kind has text
   -- inserted for this basic version.
 
@@ -465,7 +473,7 @@ function M.expand_snippet(snippet)
       end
     end
 
-    local last_pos, start_pos = update(text)
+    local start_pos, end_pos = update(text)
     -- Disallow space characters. TODO(??)
     -- TODO: allow editing variables
     if type(node) == 'table' and node.type ~= 'variable' then
@@ -475,19 +483,26 @@ function M.expand_snippet(snippet)
       -- TODO: start mark at 0,0, then inserting doesn't work properly, need
       -- left gravity. Ideally, insert left & right gravity marks at pos, then
       -- insert at that pos and it should just work.
-      local mark_start = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, start_pos[1], start_pos[2]-1, {})
-      local mark_end = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, last_pos[1], last_pos[2]-1, {})
+      -- local mark_start = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, start_pos[1], start_pos[2], {})
+      -- local mark_end = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, end_pos[1], end_pos[2], {})
 
       local var_id = assert(node.id)
       local var_part = {
-        mark_start = mark_start;
+        mark_start = start_pos;
         -- TODO(ashkan) this is only here until extranges exists.
-        mark_end = mark_end;
+        mark_end = end_pos;
       }
       -- TODO(ashkan) this is only here until extranges exists.
       var_part = setmetatable(var_part, var_mt)
-      -- print(vim.inspect(var_part.text()))
       table.insert(variable_map[var_id], var_part)
+    end
+  end
+
+  -- convert positions to marks
+  for var_id, vars in ipairs(variable_map) do
+    for index, var in ipairs(vars) do
+      var.mark_start = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, var.mark_start[1], var.mark_start[2], {right_gravity = false})
+      var.mark_end = api.nvim_buf_set_extmark(bufnr, mark_ns, 0, var.mark_end[1], var.mark_end[2], {right_gravity = true})
     end
   end
 
@@ -511,8 +526,8 @@ local function get_vim_key(s)
 end
 
 local vim_keys = {
-  bs = get_vim_key "<BS>";
-  c_w = get_vim_key "<c-w>";
+  -- bs = get_vim_key "<BS>";
+  -- c_w = get_vim_key "<c-w>";
 }
 
 -- local function teardown_buffer(bufnr)
@@ -520,35 +535,82 @@ local vim_keys = {
 --  all_buffer_cursors[bufnr] = nil
 -- end
 
-local function do_buffer(bufnr, fn)
+-- local function do_buffer(bufnr, fn)
+--   bufnr = resolve_bufnr(bufnr or 0)
+--   local active_snippet = get_active_snippet(bufnr)
+--   if not active_snippet then
+--     return false
+--   end
+--   local active_var = active_snippet.vars[active_snippet.var_index]
+--   local edits = {}
+--   local new_text = fn(active_var[1].text())
+--   for _, v in ipairs(active_var) do
+--     local A, B = v.range()
+--     local edit = make_edit(A[1], A[2], B[1], B[2], new_text)
+--     v.text = new_text
+--     table.insert(edits, edit)
+--   end
+--   if #edits > 0 then
+--     schedule(function()
+--       apply_text_edits(edits, bufnr)
+--       clear_ns(bufnr, highlight_ns)
+--       highlight_variable(bufnr, active_var)
+--       local A, B = active_var[1].range()
+--       api.nvim_win_set_cursor(0, {B[1]+1, B[2]})
+--     end)
+--     return true
+--   end
+--   return false
+-- end
+
+--- Mirror changes from one tabstop to all other matching tabstops
+local function sync()
   bufnr = resolve_bufnr(bufnr or 0)
   local active_snippet = get_active_snippet(bufnr)
   if not active_snippet then
     return false
   end
+
+  local pos = api.nvim_win_get_cursor(0)
+  -- convert to 0-index line
+  pos[1] = pos[1] - 1
+  -- offset by 1 to account for leaving insert/select mode
+  pos[2] = pos[2] + 1
+
+  clear_ns(bufnr, highlight_ns)
   local active_var = active_snippet.vars[active_snippet.var_index]
-  local edits = {}
-  local new_text = fn(active_var[1].text())
-  for _, v in ipairs(active_var) do
-    local A, B = v.range()
-    local edit = make_edit(A[1], A[2], B[1], B[2], new_text)
-    v.text = new_text
-    table.insert(edits, edit)
+  -- highlight_variable(bufnr, active_var)
+
+  -- find matching vars
+  local match, new_text
+  for var_id, vars in ipairs(active_snippet.vars) do
+    for index, var in ipairs(vars) do
+      local A, B = var.range()
+      print(var_id, vim.inspect(A), vim.inspect(B), vim.inspect(var.text()))
+      -- print(vim.inspect(A), vim.inspect(B), vim.inspect(pos))
+
+      if A[1] <= pos[1] and B[1] >= pos[1] and A[2] <= pos[2] and B[2] >= pos[2] then
+        text = var.text()
+        if not match or #text < #new_text then
+          match = var_id
+          new_text = text
+        end
+      end
+    end
+
   end
-  if #edits > 0 then
-    schedule(function()
-      apply_text_edits(edits, bufnr)
-      clear_ns(bufnr, highlight_ns)
-      highlight_variable(bufnr, active_var)
-      local A, B = active_var[1].range()
-      api.nvim_win_set_cursor(0, {B[1]+1, B[2]})
-    end)
-    return true
-  end
-  return false
+
+  -- print(match, vim.inspect(new_text))
+  --  TODO: figure out current var, find smallest range
+  --  if same vars > 1, replicate via apply_text_edits
+  --  figure out if text changed
 end
 
 M._hooks = {}
+
+function M._hooks.TextChanged()
+  sync()
+end
 
 -- function M._hooks.InsertCharPre()
 --   do_buffer(0, function(text)
@@ -576,12 +638,14 @@ M._hooks = {}
 
 M.snippets = {
   ['loc'] = 'local ${1:var} = $CURRENT_YEAR ${2:value}',
+  -- ['loc'] = 'loc ${1:var} = $CURRENT_YEAR',
   -- TODO: handle $0 better. Should auto finish ($5).
   ['for'] = '${1:i} = ${2:1}, ${3:#lines} do\n  local v = ${4:t}[${1:i}]\nend\n$5',
 }
 
 function M.expand_at_cursor()
   local pos = api.nvim_win_get_cursor(0)
+  pos[1] = pos[1] - 1
   pos[2] = pos[2] + 1
   local offset = pos[2]
   local line = api.nvim_get_current_line()
@@ -592,7 +656,6 @@ function M.expand_at_cursor()
     if not res then
       return false
     end
-    pos[1] = pos[1] - 1
     schedule(apply_text_edits, { make_edit(pos[1], pos[2] - #word, pos[1], pos[2], '') })
     schedule(M.expand_snippet, snippet)
     return true
@@ -600,12 +663,12 @@ function M.expand_at_cursor()
 end
 
 -- Need to use <Esc>:lua instead of <cmd>lua or will hit the bug where select mode will get entered twice, requiring two <Esc>s to leave
-api.nvim_set_keymap("i", "<c-k>", "<Esc>:lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
+api.nvim_set_keymap("i", "<c-k>", "<Esc>:<C-u>lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
   noremap = true;
   silent = true;
 })
 
-api.nvim_set_keymap("s", "<c-k>", "<Esc>:lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
+api.nvim_set_keymap("s", "<c-k>", "<Esc>:<C-u>lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
   noremap = true;
   silent = true;
 })
@@ -618,12 +681,12 @@ api.nvim_set_keymap("s", "<c-k>", "<Esc>:lua return vim.snippet.expand_at_cursor
 --  noremap = true;
 -- })
 
-api.nvim_set_keymap("i", "<c-j>", "<Esc>:lua vim.snippet.advance_snippet_variable(-1)<CR>", {
+api.nvim_set_keymap("i", "<c-j>", "<Esc>:<C-u>lua vim.snippet.advance_snippet_variable(-1)<CR>", {
   noremap = true;
   silent = true;
 })
 
-api.nvim_set_keymap("s", "<c-j>", "<Esc>:lua vim.snippet.advance_snippet_variable(-1)<CR>", {
+api.nvim_set_keymap("s", "<c-j>", "<Esc>:<C-u>lua vim.snippet.advance_snippet_variable(-1)<CR>", {
   noremap = true;
   silent = true;
 })
