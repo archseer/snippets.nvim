@@ -139,17 +139,17 @@ local function highlight_region(bufnr, ns, hlid, A, B)
 end
 
 local function select_region(A, B)
-  -- convert to 1-indexed coordinates
+  -- convert lines to 1-indexed coordinates
   A[1] = A[1] + 1
-  A[2] = A[2] + 1
   B[1] = B[1] + 1
-  B[2] = B[2] + 1
-  -- Seems to be in a weird mode where it's a block but keeps editing if we don't esc
-  api.nvim_feedkeys("", 'n', false)
-  -- nvim api is missing set_mark
-  vim.fn.setpos("'<", {0, A[1], A[2], 0})
-  vim.fn.setpos("'>", {0, B[1], B[2], 0})
-  api.nvim_command("normal! gv")
+  -- adjust  for off-by-1
+  A[2] = A[2] + 1
+
+  -- api.nvim_feedkeys("\\<Esc>", 'ntx', true)
+  vim.fn.setpos("'<", {0, A[1], A[2]})
+  vim.fn.setpos("'>", {0, B[1], B[2]})
+  api.nvim_input("gv<C-g>")
+  -- api.nvim_command('call feedkeys("gv\\<C-g>", "ntx")')
 end
 
 
@@ -582,6 +582,7 @@ M.snippets = {
 
 function M.expand_at_cursor()
   local pos = api.nvim_win_get_cursor(0)
+  pos[2] = pos[2] + 1
   local offset = pos[2]
   local line = api.nvim_get_current_line()
   local word = line:sub(1, offset):match("%S+$")
@@ -598,8 +599,15 @@ function M.expand_at_cursor()
   end
 end
 
-api.nvim_set_keymap("i", "<c-k>", "<cmd>lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
+-- Need to use <Esc>:lua instead of <cmd>lua or will hit the bug where select mode will get entered twice, requiring two <Esc>s to leave
+api.nvim_set_keymap("i", "<c-k>", "<Esc>:lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
   noremap = true;
+  silent = true;
+})
+
+api.nvim_set_keymap("s", "<c-k>", "<Esc>:lua return vim.snippet.expand_at_cursor() or vim.snippet.advance_snippet_variable(1) or vim.snippet.finish_snippet()<CR>", {
+  noremap = true;
+  silent = true;
 })
 
 --api.nvim_set_keymap("i", "<c-z>", "<cmd>lua vim.snippet.expand_at_cursor()<CR>", {
@@ -610,8 +618,14 @@ api.nvim_set_keymap("i", "<c-k>", "<cmd>lua return vim.snippet.expand_at_cursor(
 --  noremap = true;
 -- })
 
-api.nvim_set_keymap("i", "<c-j>", "<cmd>lua vim.snippet.advance_snippet_variable(-1)<CR>", {
+api.nvim_set_keymap("i", "<c-j>", "<Esc>:lua vim.snippet.advance_snippet_variable(-1)<CR>", {
   noremap = true;
+  silent = true;
+})
+
+api.nvim_set_keymap("s", "<c-j>", "<Esc>:lua vim.snippet.advance_snippet_variable(-1)<CR>", {
+  noremap = true;
+  silent = true;
 })
 
 --api.nvim_set_keymap("i", "<c-z>", "v:lua.vim.snippet.expand_at_cursor()", {
