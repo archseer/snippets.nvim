@@ -269,6 +269,9 @@ end
 
 local function snippet_mode_setup()
   do_hook_autocmds {
+    "autocmd TextChanged <buffer> lua vim.snippet._hooks.TextChanged()";
+    "autocmd TextChangedI <buffer> lua vim.snippet._hooks.TextChanged()";
+    "autocmd TextChangedP <buffer> lua vim.snippet._hooks.TextChanged()";
     -- "autocmd InsertCharPre <buffer> lua vim.snippet._hooks.InsertCharPre()";
     -- "autocmd InsertLeave <buffer> lua vim.snippet._hooks.InsertLeave()";
     -- "autocmd InsertEnter <buffer> lua vim.snippet._hooks.InsertEnter()";
@@ -461,7 +464,8 @@ function M.expand_snippet(snippet)
       text = node
     elseif type(node) == 'table' then
       if node.type == 'tabstop' then
-        text = ''
+        -- TODO: initialize tabstop to prev value if any
+        text = ' '
       elseif node.type == 'placeholder' then
         -- TODO: handle recursive
         text = node.value[1]
@@ -575,19 +579,19 @@ local function sync()
   -- convert to 0-index line
   pos[1] = pos[1] - 1
   -- offset by 1 to account for leaving insert/select mode
-  pos[2] = pos[2] + 1
+  pos[2] = pos[2] - 1
 
   clear_ns(bufnr, highlight_ns)
   local active_var = active_snippet.vars[active_snippet.var_index]
   -- highlight_variable(bufnr, active_var)
 
-  -- find matching vars
+  -- Find the smallest matching var. Smallest because we want to edit the
+  -- innermost tabstop: ${2: hello ${3:wor|ld}} <-- edit $3
   local match, new_text
   for var_id, vars in ipairs(active_snippet.vars) do
     for index, var in ipairs(vars) do
       local A, B = var.range()
-      print(var_id, vim.inspect(A), vim.inspect(B), vim.inspect(var.text()))
-      -- print(vim.inspect(A), vim.inspect(B), vim.inspect(pos))
+      -- print(var_id, vim.inspect(A), vim.inspect(B), vim.inspect(var.text()))
 
       if A[1] <= pos[1] and B[1] >= pos[1] and A[2] <= pos[2] and B[2] >= pos[2] then
         text = var.text()
@@ -600,10 +604,35 @@ local function sync()
 
   end
 
-  -- print(match, vim.inspect(new_text))
-  --  TODO: figure out current var, find smallest range
-  --  if same vars > 1, replicate via apply_text_edits
-  --  figure out if text changed
+  -- TODO: figure out if text changed, else ignore
+
+  -- print(vim.inspect(match), vim.inspect(new_text))
+
+  if not match then
+    return
+  end
+
+  local matches = active_snippet.vars[match]
+
+  if #matches == 1 then
+    -- nothing to mirror
+    return
+  end
+
+  local edits = {}
+  -- TODO: this callback still gets called for each edit. Would be nice to skip
+  -- triggering it.
+  for _, var in ipairs(matches) do
+    if var.text() ~= new_text then
+      local A, B = var.range()
+      local edit = make_edit(A[1], A[2], B[1], B[2]+1, new_text)
+      table.insert(edits, edit)
+    end
+  end
+
+  schedule(function()
+    apply_text_edits(edits, bufnr)
+  end)
 end
 
 M._hooks = {}
@@ -637,7 +666,7 @@ end
 -- end
 
 M.snippets = {
-  ['loc'] = 'local ${1:var} = $CURRENT_YEAR ${2:value}',
+  ['loc'] = 'local ${1:var} = $CURRENT_YEAR $1 ${2:value}',
   -- ['loc'] = 'loc ${1:var} = $CURRENT_YEAR',
   -- TODO: handle $0 better. Should auto finish ($5).
   ['for'] = '${1:i} = ${2:1}, ${3:#lines} do\n  local v = ${4:t}[${1:i}]\nend\n$5',
