@@ -493,6 +493,19 @@ end
 function M.expand_snippet(snippet)
   local bufnr = resolve_bufnr(0)
 
+  -- parse the snippet if in string form
+  if type(snippet) == 'string' then
+    local len = #snippet
+    local res, pos
+    res, snippet, pos = parse(snippet, 1)
+    -- either parsed partially or not at all
+    if not res or pos ~= len + 1 then
+      print(pos, len)
+      err_message("Couldn't parse snippet!")
+      return false
+    end
+  end
+
   -- TODO: re-enable validate_snippet_body(snippet)
 
   -- TODO(ashkan) this should be changed when extranges are available.
@@ -599,10 +612,6 @@ function M.expand_at_cursor()
   local word = line:sub(1, offset):match("%S+$")
   local snippet = M.snippets[word]
   if snippet then
-    res, snippet, _ = parse(snippet, 1)
-    if not res then
-      return false
-    end
     schedule(apply_text_edits, { make_edit(pos[1], pos[2] - #word, pos[1], pos[2], '') })
     schedule(M.expand_snippet, snippet)
     return true
